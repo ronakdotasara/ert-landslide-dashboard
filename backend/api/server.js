@@ -4,7 +4,7 @@ const http       = require('http');
 const path       = require('path');
 require('dotenv').config();
 
-const { initDB }        = require('./db/models/db');
+const { initDB }        = require('../db/models/db');
 const { initWebSocket } = require('./websocket');
 const sensorRoutes      = require('./routes/sensor');
 const readingsRoutes    = require('./routes/readings');

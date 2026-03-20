@@ -1,3 +1,4 @@
+import { API_BASE } from '../config';
 import { useEffect, useState } from 'react';
 import { useAlertStore } from '../store/alertStore';
 
@@ -16,7 +17,7 @@ export default function AlertsLog() {
   useEffect(() => { fetchAlerts(); }, []);
 
   async function saveThresholds() {
-    await fetch('/api/alerts/thresholds', {
+    await fetch(`${API_BASE}/api/alerts/thresholds`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device_id: 'ERT-001', low_threshold: lowThreshold, high_threshold: highThreshold }),

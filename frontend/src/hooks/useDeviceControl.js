@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { API_BASE } from '../config';
 
 const DEVICE = 'ERT-001';
 
@@ -11,7 +12,7 @@ export function useDeviceControl() {
     if (!command) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/control', {
+      const res = await fetch(`${API_BASE}/api/control`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ device_id: DEVICE, command }),

@@ -1,7 +1,7 @@
 // Simple lightweight store using React context + useReducer
-// Drop-in replacement if you prefer Zustand: npm install zustand
+// No JSX used — works as a plain .js file
 
-import { createContext, useContext, useReducer } from 'react';
+import { createElement, createContext, useContext, useReducer } from 'react';
 
 const initialState = {
   readings:     [],
@@ -26,10 +26,10 @@ const SensorContext = createContext(null);
 
 export function SensorProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  return (
-    <SensorContext.Provider value={{ state, dispatch }}>
-      {children}
-    </SensorContext.Provider>
+  return createElement(
+    SensorContext.Provider,
+    { value: { state, dispatch } },
+    children
   );
 }
 

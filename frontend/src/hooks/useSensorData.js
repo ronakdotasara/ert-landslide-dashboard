@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { API_BASE } from '../config';
 
 const DEVICE = 'ERT-001';
 
@@ -12,8 +13,8 @@ export function useSensorData(limit = 500) {
     setLoading(true);
     try {
       const [dataRes, statsRes] = await Promise.all([
-        fetch(`/api/readings?device=${DEVICE}&limit=${limit}`),
-        fetch(`/api/readings/stats?device=${DEVICE}`),
+        fetch(`${API_BASE}/api/readings?device=${DEVICE}&limit=${limit}`),
+        fetch(`${API_BASE}/api/readings/stats?device=${DEVICE}`),
       ]);
       const data  = await dataRes.json();
       const sData = await statsRes.json();

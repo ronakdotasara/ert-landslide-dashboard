@@ -1,3 +1,4 @@
+import { API_BASE } from '../config';
 import { useState } from 'react';
 
 export default function DataExport() {
@@ -13,7 +14,7 @@ export default function DataExport() {
       if (from) params.set('from', new Date(from).getTime());
       if (to)   params.set('to',   new Date(to).getTime());
 
-      const res  = await fetch(`/api/readings?${params}`);
+      const res  = await fetch(`${API_BASE}/api/readings?${params}`);
       const data = await res.json();
       const rows = data.readings || [];
 
