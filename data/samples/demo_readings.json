@@ -1,0 +1,18 @@
+[
+  { "elec_a": 0, "elec_b": 1, "voltage": 0.0248, "current": 0.0501, "resistivity": 312.4 },
+  { "elec_a": 0, "elec_b": 2, "voltage": 0.0190, "current": 0.0498, "resistivity": 238.7 },
+  { "elec_a": 1, "elec_b": 2, "voltage": 0.0265, "current": 0.0503, "resistivity": 330.9 },
+  { "elec_a": 1, "elec_b": 3, "voltage": 0.0072, "current": 0.0499, "resistivity":  45.2 },
+  { "elec_a": 2, "elec_b": 3, "voltage": 0.0068, "current": 0.0501, "resistivity":  42.8 },
+  { "elec_a": 2, "elec_b": 4, "voltage": 0.0071, "current": 0.0500, "resistivity":  44.6 },
+  { "elec_a": 3, "elec_b": 4, "voltage": 0.0069, "current": 0.0498, "resistivity":  43.5 },
+  { "elec_a": 3, "elec_b": 5, "voltage": 0.0215, "current": 0.0502, "resistivity": 269.3 },
+  { "elec_a": 4, "elec_b": 5, "voltage": 0.0303, "current": 0.0499, "resistivity": 381.2 },
+  { "elec_a": 4, "elec_b": 6, "voltage": 0.0318, "current": 0.0501, "resistivity": 398.7 },
+  { "elec_a": 5, "elec_b": 6, "voltage": 0.0289, "current": 0.0500, "resistivity": 362.8 },
+  { "elec_a": 5, "elec_b": 7, "voltage": 0.0245, "current": 0.0498, "resistivity": 308.9 },
+  { "elec_a": 6, "elec_b": 7, "voltage": 0.0271, "current": 0.0503, "resistivity": 339.5 },
+  { "elec_a": 7, "elec_b": 8, "voltage": 0.0198, "current": 0.0499, "resistivity": 249.4 },
+  { "elec_a": 8, "elec_b": 9, "voltage": 0.0063, "current": 0.0501, "resistivity":  39.6 },
+  { "elec_a": 9, "elec_b": 10,"voltage": 0.0059, "current": 0.0500, "resistivity":  37.1 }
+]

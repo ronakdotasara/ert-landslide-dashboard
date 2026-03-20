@@ -1,0 +1,38 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Build outputs
+frontend/build/
+frontend/dist/
+
+# Environment
+.env
+*.env.local
+
+# Database
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+data/raw/*
+data/processed/*
+data/calibration/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/calibration/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
