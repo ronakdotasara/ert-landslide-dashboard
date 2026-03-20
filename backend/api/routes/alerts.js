@@ -1,50 +1,45 @@
 const express = require('express');
 const router  = express.Router();
-const { getDB } = require('../db/models/db');
+const { run, get, all } = require('../../db/models/db');
 
-// GET /api/alerts?device=ERT-001&limit=100&unread=true
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const { device, limit = 100, unread } = req.query;
-  const db = getDB();
-
   let query = 'SELECT * FROM alerts WHERE 1=1';
   const params = [];
   if (device) { query += ' AND device_id = ?'; params.push(device); }
   if (unread === 'true') { query += ' AND read = 0'; }
   query += ' ORDER BY timestamp_ms DESC LIMIT ?';
   params.push(Number(limit));
-
-  const rows = db.prepare(query).all(...params);
-  res.json({ ok: true, count: rows.length, alerts: rows });
+  try {
+    const rows = await all(query, params);
+    res.json({ ok: true, count: rows.length, alerts: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/alerts/:id/read  — mark alert as read
-router.post('/:id/read', (req, res) => {
-  const db = getDB();
-  db.prepare('UPDATE alerts SET read = 1 WHERE id = ?').run(req.params.id);
-  res.json({ ok: true });
+router.post('/:id/read', async (req, res) => {
+  try {
+    await run('UPDATE alerts SET read = 1 WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/alerts/thresholds?device=ERT-001
-router.get('/thresholds', (req, res) => {
+router.get('/thresholds', async (req, res) => {
   const { device } = req.query;
-  const db = getDB();
-  const rows = db.prepare('SELECT * FROM thresholds WHERE device_id = ?').all(device || 'ERT-001');
-  res.json({ ok: true, thresholds: rows });
+  try {
+    const rows = await all('SELECT * FROM thresholds WHERE device_id = ?', [device || 'ERT-001']);
+    res.json({ ok: true, thresholds: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/alerts/thresholds  — set alert thresholds
-// Body: { device_id, low_threshold, high_threshold }
-router.post('/thresholds', (req, res) => {
+router.post('/thresholds', async (req, res) => {
   const { device_id, low_threshold, high_threshold } = req.body;
-  const db = getDB();
-  db.prepare(`
-    INSERT INTO thresholds (device_id, low_threshold, high_threshold)
-    VALUES (?, ?, ?)
-    ON CONFLICT(device_id) DO UPDATE SET low_threshold=excluded.low_threshold,
-                                          high_threshold=excluded.high_threshold
-  `).run(device_id, low_threshold, high_threshold);
-  res.json({ ok: true });
+  try {
+    await run(
+      'INSERT INTO thresholds (device_id, low_threshold, high_threshold) VALUES (?,?,?) ON CONFLICT(device_id) DO UPDATE SET low_threshold=excluded.low_threshold, high_threshold=excluded.high_threshold',
+      [device_id, low_threshold, high_threshold]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;
