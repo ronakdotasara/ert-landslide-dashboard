@@ -1,7 +1,6 @@
 const express    = require('express');
 const cors       = require('cors');
 const http       = require('http');
-const path       = require('path');
 require('dotenv').config();
 
 const { initDB }        = require('../db/models/db');
@@ -16,9 +15,11 @@ const server = http.createServer(app);
 const PORT   = process.env.PORT || 3001;
 
 // ── Middleware ─────────────────────────────────────────────────────────────
-app.use(cors());
+app.use(cors({
+  origin: '*',   // Vercel frontend can reach this
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+}));
 app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 app.use('/api/sensor',   sensorRoutes);
@@ -28,16 +29,19 @@ app.use('/api/alerts',   alertsRoutes);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
-// Serve React app for all other routes
-app.get('*', (req, res) =>
-  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'))
-);
+// ── 404 fallback ───────────────────────────────────────────────────────────
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 // ── Start ──────────────────────────────────────────────────────────────────
 async function start() {
   await initDB();
   initWebSocket(server);
-  server.listen(PORT, () => console.log(`[SERVER] Listening on port ${PORT}`));
+  server.listen(PORT, '0.0.0.0', () =>
+    console.log(`[SERVER] Listening on port ${PORT}`)
+  );
 }
 
-start().catch(err => { console.error('[SERVER] Fatal:', err); process.exit(1); });
+start().catch(err => {
+  console.error('[SERVER] Fatal:', err);
+  process.exit(1);
+});
