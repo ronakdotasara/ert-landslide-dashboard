@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://YOUR_BACKEND_URL/api/:path*" },
-    { "source": "/ws",         "destination": "https://YOUR_BACKEND_URL/ws" }
+    { "source": "/api/:path*", "destination": "https://ert-landslide-dashboard-production.up.railway.app/api/:path*" },
+    { "source": "/ws",         "destination": "https://ert-landslide-dashboard-production.up.railway.app/ws" }
   ]
 }
