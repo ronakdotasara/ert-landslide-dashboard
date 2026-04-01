@@ -20,9 +20,22 @@ export default function DataExport() {
 
       let content, mime, ext;
       if (format === 'csv') {
-        const header = 'id,device_id,timestamp_ms,elec_a,elec_b,voltage,current,resistivity';
+        const header = 'id,device_id,timestamp_ms,elec_a,elec_b,elec_m,elec_n,voltage_mV,current_mA,resistance,resistivity,protocol';
         const lines  = rows.map(r =>
-          `${r.id},${r.device_id},${r.timestamp_ms},${r.elec_a},${r.elec_b},${r.voltage},${r.current},${r.resistivity}`
+          [
+            r.id,
+            r.device_id,
+            r.timestamp_ms,
+            r.elec_a,
+            r.elec_b,
+            r.elec_m,
+            r.elec_n,
+            r.voltage_mV  ?? '',   // ← was r.voltage (undefined)
+            r.current_mA  ?? '',   // ← was r.current (undefined)
+            r.resistance  ?? '',
+            r.resistivity ?? '',
+            r.protocol    ?? '',
+          ].join(',')
         );
         content = [header, ...lines].join('\n');
         mime = 'text/csv'; ext = 'csv';
