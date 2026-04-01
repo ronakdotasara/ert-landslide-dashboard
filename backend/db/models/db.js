@@ -1,9 +1,5 @@
 /**
  * db/models/db.js  —  SQLite helpers for ERT Landslide Monitor
- *
- * Tables:
- *   readings  — every electrode measurement from the ESP32
- *   alerts    — anomaly and voltage alerts
  */
 
 const Database = require('better-sqlite3');
@@ -12,7 +8,6 @@ const path     = require('path');
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../ert.db');
 let db;
 
-// ── Init — create tables if not present ──────────────────────
 function initDB() {
   db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
@@ -55,13 +50,22 @@ function initDB() {
 
     CREATE INDEX IF NOT EXISTS idx_alerts_ts
       ON alerts (ts DESC);
+
+    CREATE TABLE IF NOT EXISTS command_log (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id    TEXT    NOT NULL,
+      command      TEXT    NOT NULL,
+      timestamp_ms INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_command_log_device_ts
+      ON command_log (device_id, timestamp_ms DESC);
   `);
 
   console.log(`[DB] SQLite ready at ${DB_PATH}`);
   return Promise.resolve();
 }
 
-// ── Prepared statements (lazy init after initDB) ─────────────
 let _insertReading, _insertAlert;
 
 function getInsertReading() {
@@ -91,8 +95,6 @@ function getInsertAlert() {
   }
   return _insertAlert;
 }
-
-// ── Public helpers ────────────────────────────────────────────
 
 function saveReading(r) {
   getInsertReading().run({
@@ -126,7 +128,6 @@ function saveAlert(a) {
   return Promise.resolve();
 }
 
-// ── Generic query helpers (used by route files) ───────────────
 function get(sql, params = []) {
   return Promise.resolve(db.prepare(sql).get(...params));
 }

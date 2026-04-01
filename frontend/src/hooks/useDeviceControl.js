@@ -17,11 +17,18 @@ export function useDeviceControl() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ device_id: DEVICE, command }),
       });
+
+      if (!res.ok) { // Check if the response status is not in the 2xx range
+        const errorText = await res.text(); // Read as text in case it's not JSON
+        throw new Error(`Server responded with status ${res.status}: ${errorText}`);
+      }
+
       const data = await res.json();
       setLastResponse(data.ok ? `OK: ${command}` : `Error: ${data.error}`);
       setCommandLog(prev => [...prev, { command, ts: Date.now(), ok: data.ok }]);
     } catch (e) {
-      setLastResponse(`Network error: ${e.message}`);
+      setLastResponse(`Network or server error: ${e.message}`); // Updated message
+      console.error("Error sending command:", e); // Log the full error
     } finally {
       setLoading(false);
     }
