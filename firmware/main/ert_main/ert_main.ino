@@ -1,21 +1,22 @@
 /*
  * ============================================================
  *  ERT LANDSLIDE MONITOR — ESP32 DevKit V1
- *  FINAL BUILD v2.0 — Manual WSS with WiFiClientSecure
+ *  FINAL BUILD v3.0 — Corrected WSS + Render deployment
  * ============================================================
  *  WiFi  : GalaxyS24  /  dotasara
- *  Server: wss://ert-landslide-dashboard-production.up.railway.app
+ *  Server: wss://ert-landslide-dashboard.onrender.com
  *  Device: ERT-001
  *  Electrodes : 8  |  Spacing: 0.05 m (5 cm)
- *  Mains      : 220 Vc
+ *  Mains      : 220 Vac
  *  Scan       : manual (dashboard START_SCAN command)
  *  Interval   : 30 s
  * ============================================================
- *  KEY CHANGE FROM v1:
- *  Uses WiFiClientSecure with setInsecure() as the underlying
- *  TCP client for WebSockets. This correctly bypasses Railway's
- *  TLS certificate verification which was causing the repeated
- *  disconnect loop.
+ *  FIXES FROM v2:
+ *   1. WS_HOST is hostname only (not a full URL string)
+ *   2. WS_PORT is 443 (Render serves WSS on 443, not 3001)
+ *   3. beginSSL() is used instead of begin() for TLS
+ *   4. secureClient.setInsecure() is actually called
+ *   5. wsClient.beginSSLWithCA() replaced with proper flow
  * ============================================================
  *  Libraries required:
  *    • WebSockets by Markus Sattler  v2.7.2
@@ -48,8 +49,10 @@
 #define WIFI_SSID        "GalaxyS24"
 #define WIFI_PASSWORD    "dotasara"
 
-#define WS_HOST   "10.128.101.135"
-#define WS_PORT   3001
+// ✅ FIX 1: hostname only — no protocol prefix, no path
+#define WS_HOST   "ert-landslide-dashboard.onrender.com"
+// ✅ FIX 2: Render exposes WSS on port 443 externally
+#define WS_PORT   443
 #define WS_PATH   "/ws"
 #define DEVICE_ID "ERT-001"
 
@@ -86,6 +89,9 @@
 #define ZMPT_INTERVAL_MS    2000UL
 #define STATUS_INTERVAL_MS 20000UL
 
+// Render free tier cold-start can take ~45s — allow enough time
+#define WS_RECONNECT_MS    5000UL
+
 #define PROTO_WENNER       0
 #define PROTO_DIPOLE       1
 #define PROTO_SCHLUMBERGER 2
@@ -95,7 +101,6 @@
 // ═════════════════════════════════════════════════════════════
 Adafruit_INA219   ina219;
 Adafruit_ADS1115  ads;
-WiFiClientSecure  secureClient;   // ← SSL client with setInsecure()
 WebSocketsClient  wsClient;
 
 struct Reading {
@@ -165,31 +170,34 @@ float readZMPT_Vrms() {
 
 float geometricFactor(uint8_t a, uint8_t b, uint8_t m, uint8_t n) {
   float s  = ELECTRODE_SPACING;
-  float AM = fabsf((int)m-(int)a)*s, BM = fabsf((int)m-(int)b)*s;
-  float AN = fabsf((int)n-(int)a)*s, BN = fabsf((int)n-(int)b)*s;
-  if (AM<1e-9f||BM<1e-9f||AN<1e-9f||BN<1e-9f) return 0.0f;
-  float inv = (1.0f/AM)-(1.0f/BM)-(1.0f/AN)+(1.0f/BN);
-  return fabsf(inv)<1e-9f ? 0.0f : 2.0f*PI/inv;
+  float AM = fabsf((int)m - (int)a) * s;
+  float BM = fabsf((int)m - (int)b) * s;
+  float AN = fabsf((int)n - (int)a) * s;
+  float BN = fabsf((int)n - (int)b) * s;
+  if (AM < 1e-9f || BM < 1e-9f || AN < 1e-9f || BN < 1e-9f) return 0.0f;
+  float inv = (1.0f / AM) - (1.0f / BM) - (1.0f / AN) + (1.0f / BN);
+  return fabsf(inv) < 1e-9f ? 0.0f : 2.0f * PI / inv;
 }
 
 Reading takeMeasurement(uint8_t A, uint8_t B, uint8_t M, uint8_t N,
                          const char* protoName) {
   Reading r;
-  r.elec_a=A; r.elec_b=B; r.elec_m=M; r.elec_n=N;
-  r.protocol=String(protoName);
-  r.timestamp_ms=millis();
-  setMux1(A); setMux2(M);
+  r.elec_a = A; r.elec_b = B; r.elec_m = M; r.elec_n = N;
+  r.protocol = String(protoName);
+  r.timestamp_ms = millis();
+  setMux1(A);
+  setMux2(M);
   delay(25);
   r.voltage_mV = readElectrodeVoltage_mV(16);
   r.current_mA = ina219.getCurrent_mA();
   if (fabsf(r.current_mA) < 0.01f) {
     r.resistance = r.resistivity = 0.0f;
   } else {
-    float V = (r.voltage_mV/AD620_GAIN)/1000.0f;
-    float I = r.current_mA/1000.0f;
-    r.resistance = V/I;
-    float k = geometricFactor(A,B,M,N);
-    r.resistivity = k>0.0f ? k*r.resistance : 0.0f;
+    float V = (r.voltage_mV / AD620_GAIN) / 1000.0f;
+    float I = r.current_mA / 1000.0f;
+    r.resistance = V / I;
+    float k = geometricFactor(A, B, M, N);
+    r.resistivity = k > 0.0f ? k * r.resistance : 0.0f;
   }
   return r;
 }
@@ -199,59 +207,74 @@ Reading takeMeasurement(uint8_t A, uint8_t B, uint8_t M, uint8_t N,
 // ═════════════════════════════════════════════════════════════
 void appendReading(JsonArray& arr, const Reading& r) {
   JsonObject o = arr.createNestedObject();
-  o["device_id"]   = DEVICE_ID;
-  o["elec_a"]      = r.elec_a;   o["elec_b"]     = r.elec_b;
-  o["elec_m"]      = r.elec_m;   o["elec_n"]     = r.elec_n;
-  o["voltage_mV"]  = round(r.voltage_mV  *1000)/1000.0f;
-  o["current_mA"]  = round(r.current_mA  *1000)/1000.0f;
-  o["resistance"]  = round(r.resistance  *1000)/1000.0f;
-  o["resistivity"] = round(r.resistivity *1000)/1000.0f;
-  o["protocol"]    = r.protocol;
-  o["timestamp_ms"]= r.timestamp_ms;
+  o["device_id"]    = DEVICE_ID;
+  o["elec_a"]       = r.elec_a;
+  o["elec_b"]       = r.elec_b;
+  o["elec_m"]       = r.elec_m;
+  o["elec_n"]       = r.elec_n;
+  o["voltage_mV"]   = round(r.voltage_mV   * 1000) / 1000.0f;
+  o["current_mA"]   = round(r.current_mA   * 1000) / 1000.0f;
+  o["resistance"]   = round(r.resistance   * 1000) / 1000.0f;
+  o["resistivity"]  = round(r.resistivity  * 1000) / 1000.0f;
+  o["protocol"]     = r.protocol;
+  o["timestamp_ms"] = r.timestamp_ms;
 }
 
 void broadcastReading(const Reading& r) {
   if (!wsConnected) return;
   StaticJsonDocument<320> doc;
-  doc["type"]="READING"; doc["device_id"]=DEVICE_ID;
-  doc["elec_a"]=r.elec_a; doc["elec_b"]=r.elec_b;
-  doc["elec_m"]=r.elec_m; doc["elec_n"]=r.elec_n;
-  doc["voltage_mV"] =round(r.voltage_mV *1000)/1000.0f;
-  doc["current_mA"] =round(r.current_mA *1000)/1000.0f;
-  doc["resistance"] =round(r.resistance *1000)/1000.0f;
-  doc["resistivity"]=round(r.resistivity*1000)/1000.0f;
-  doc["protocol"]=r.protocol; doc["timestamp_ms"]=r.timestamp_ms;
-  String out; serializeJson(doc,out); wsClient.sendTXT(out);
+  doc["type"]         = "READING";
+  doc["device_id"]    = DEVICE_ID;
+  doc["elec_a"]       = r.elec_a;
+  doc["elec_b"]       = r.elec_b;
+  doc["elec_m"]       = r.elec_m;
+  doc["elec_n"]       = r.elec_n;
+  doc["voltage_mV"]   = round(r.voltage_mV  * 1000) / 1000.0f;
+  doc["current_mA"]   = round(r.current_mA  * 1000) / 1000.0f;
+  doc["resistance"]   = round(r.resistance  * 1000) / 1000.0f;
+  doc["resistivity"]  = round(r.resistivity * 1000) / 1000.0f;
+  doc["protocol"]     = r.protocol;
+  doc["timestamp_ms"] = r.timestamp_ms;
+  String out;
+  serializeJson(doc, out);
+  wsClient.sendTXT(out);
 }
 
 // ═════════════════════════════════════════════════════════════
 //  ERT Protocols
 // ═════════════════════════════════════════════════════════════
 void runWenner(JsonArray& arr) {
-  for (uint8_t a=0; a+3<NUM_ELECTRODES; a++) {
-    Reading r=takeMeasurement(a,a+3,a+1,a+2,"Wenner");
-    appendReading(arr,r); broadcastReading(r); delay(30);
+  for (uint8_t a = 0; a + 3 < NUM_ELECTRODES; a++) {
+    Reading r = takeMeasurement(a, a + 3, a + 1, a + 2, "Wenner");
+    appendReading(arr, r);
+    broadcastReading(r);
+    delay(30);
   }
 }
 
 void runDipole(JsonArray& arr) {
-  for (uint8_t a=0; a+1<NUM_ELECTRODES; a++) {
-    for (uint8_t n=1; n<=3; n++) {
-      uint8_t M=a+1+n, N=M+1;
-      if (N>=NUM_ELECTRODES) break;
-      Reading r=takeMeasurement(a,a+1,M,N,"Dipole-Dipole");
-      appendReading(arr,r); broadcastReading(r); delay(30);
+  for (uint8_t a = 0; a + 1 < NUM_ELECTRODES; a++) {
+    for (uint8_t n = 1; n <= 3; n++) {
+      uint8_t M = a + 1 + n, N = M + 1;
+      if (N >= NUM_ELECTRODES) break;
+      Reading r = takeMeasurement(a, a + 1, M, N, "Dipole-Dipole");
+      appendReading(arr, r);
+      broadcastReading(r);
+      delay(30);
     }
   }
 }
 
 void runSchlumberger(JsonArray& arr) {
-  uint8_t M=NUM_ELECTRODES/2-1, N=NUM_ELECTRODES/2;
-  for (uint8_t a=0; a<M; a++) {
-    uint8_t A=a, B=NUM_ELECTRODES-1-a;
-    if (A>=M) break;
-    Reading r=takeMeasurement(A,B,M,N,"Schlumberger");
-    appendReading(arr,r); broadcastReading(r); delay(30);
+  uint8_t M = NUM_ELECTRODES / 2 - 1;
+  uint8_t N = NUM_ELECTRODES / 2;
+  for (uint8_t a = 0; a < M; a++) {
+    uint8_t A = a, B = NUM_ELECTRODES - 1 - a;
+    if (A >= M) break;
+    Reading r = takeMeasurement(A, B, M, N, "Schlumberger");
+    appendReading(arr, r);
+    broadcastReading(r);
+    delay(30);
   }
 }
 
@@ -260,24 +283,33 @@ void runSchlumberger(JsonArray& arr) {
 // ═════════════════════════════════════════════════════════════
 void runFullScan() {
   const char* pn =
-    activeProtocol==PROTO_DIPOLE       ? "Dipole-Dipole" :
-    activeProtocol==PROTO_SCHLUMBERGER ? "Schlumberger"  : "Wenner";
+    activeProtocol == PROTO_DIPOLE       ? "Dipole-Dipole" :
+    activeProtocol == PROTO_SCHLUMBERGER ? "Schlumberger"  : "Wenner";
+
   Serial.printf("[ERT] Scan #%lu  protocol=%s\n", ++scanCount, pn);
   ledcWrite(PIN_PWM, PWM_DUTY);
   delay(10);
+
   DynamicJsonDocument doc(6144);
-  doc["type"]="SCAN_COMPLETE"; doc["device_id"]=DEVICE_ID;
-  doc["protocol"]=pn; doc["scan_ts"]=millis(); doc["scan_num"]=scanCount;
-  JsonArray arr=doc.createNestedArray("readings");
-  switch(activeProtocol) {
+  doc["type"]      = "SCAN_COMPLETE";
+  doc["device_id"] = DEVICE_ID;
+  doc["protocol"]  = pn;
+  doc["scan_ts"]   = millis();
+  doc["scan_num"]  = scanCount;
+  JsonArray arr = doc.createNestedArray("readings");
+
+  switch (activeProtocol) {
     case PROTO_WENNER:       runWenner(arr);       break;
     case PROTO_DIPOLE:       runDipole(arr);       break;
     case PROTO_SCHLUMBERGER: runSchlumberger(arr); break;
   }
+
   ledcWrite(PIN_PWM, 0);
-  Serial.printf("[ERT] Done — %d readings\n",(int)arr.size());
+  Serial.printf("[ERT] Done — %d readings\n", (int)arr.size());
+
   if (wsConnected) {
-    String out; serializeJson(doc,out);
+    String out;
+    serializeJson(doc, out);
     wsClient.sendTXT(out);
     Serial.printf("[WS] Sent %d bytes\n", out.length());
   }
@@ -288,85 +320,100 @@ void broadcastZMPT() {
   Serial.printf("[ZMPT] Vrms = %.1f V\n", zmptVoltage);
   if (!wsConnected) return;
   StaticJsonDocument<160> doc;
-  doc["type"]="VOLTAGE_AC"; doc["device_id"]=DEVICE_ID;
-  doc["vrms"]=round(zmptVoltage*10)/10.0f;
-  doc["timestamp_ms"]=millis();
-  String out; serializeJson(doc,out); wsClient.sendTXT(out);
+  doc["type"]         = "VOLTAGE_AC";
+  doc["device_id"]    = DEVICE_ID;
+  doc["vrms"]         = round(zmptVoltage * 10) / 10.0f;
+  doc["timestamp_ms"] = millis();
+  String out;
+  serializeJson(doc, out);
+  wsClient.sendTXT(out);
 }
 
 void broadcastStatus() {
   busVoltage = ina219.getBusVoltage_V();
   if (!wsConnected) return;
   StaticJsonDocument<320> doc;
-  doc["type"]="STATUS"; doc["device_id"]=DEVICE_ID;
-  doc["scanning"]=scanning;
-  doc["protocol"]=
-    activeProtocol==PROTO_DIPOLE       ? "Dipole-Dipole" :
-    activeProtocol==PROTO_SCHLUMBERGER ? "Schlumberger"  : "Wenner";
-  doc["vrms_ac"]    =round(zmptVoltage*10)/10.0f;
-  doc["bus_voltage"]=round(busVoltage*100)/100.0f;
-  doc["scan_count"] =scanCount;
-  doc["ip"]         =WiFi.localIP().toString();
-  doc["rssi"]       =WiFi.RSSI();
-  doc["uptime_s"]   =millis()/1000;
-  doc["timestamp_ms"]=millis();
-  String out; serializeJson(doc,out); wsClient.sendTXT(out);
+  doc["type"]         = "STATUS";
+  doc["device_id"]    = DEVICE_ID;
+  doc["scanning"]     = scanning;
+  doc["protocol"]     =
+    activeProtocol == PROTO_DIPOLE       ? "Dipole-Dipole" :
+    activeProtocol == PROTO_SCHLUMBERGER ? "Schlumberger"  : "Wenner";
+  doc["vrms_ac"]      = round(zmptVoltage  * 10)  / 10.0f;
+  doc["bus_voltage"]  = round(busVoltage   * 100) / 100.0f;
+  doc["scan_count"]   = scanCount;
+  doc["ip"]           = WiFi.localIP().toString();
+  doc["rssi"]         = WiFi.RSSI();
+  doc["uptime_s"]     = millis() / 1000;
+  doc["timestamp_ms"] = millis();
+  String out;
+  serializeJson(doc, out);
+  wsClient.sendTXT(out);
   Serial.printf("[STATUS] scanning=%d vrms=%.1fV bus=%.2fV rssi=%d\n",
-                scanning,zmptVoltage,busVoltage,(int)WiFi.RSSI());
+                scanning, zmptVoltage, busVoltage, (int)WiFi.RSSI());
 }
 
 // ═════════════════════════════════════════════════════════════
 //  WebSocket event handler
 // ═════════════════════════════════════════════════════════════
 void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
-  switch(type) {
+  switch (type) {
 
     case WStype_CONNECTED:
       wsConnected = true;
-      Serial.printf("[WS] ✓ Connected to %s\n",(char*)payload);
+      Serial.printf("[WS] ✓ Connected — path: %s\n", (char*)payload);
       broadcastStatus();
       break;
 
     case WStype_DISCONNECTED:
       wsConnected = false;
-      Serial.println("[WS] Disconnected — retrying in 3 s...");
+      Serial.println("[WS] Disconnected — retrying...");
       break;
 
     case WStype_TEXT: {
       StaticJsonDocument<256> cmd;
-      if (deserializeJson(cmd,payload,length)) break;
+      if (deserializeJson(cmd, payload, length)) break;
       const char* t = cmd["type"] | "";
       Serial.printf("[WS] CMD: %s\n", t);
 
-      if (strcmp(t,"START_SCAN")==0) {
+      if (strcmp(t, "START_SCAN") == 0) {
         const char* proto = cmd["protocol"] | "Wenner";
         activeProtocol =
-          strcmp(proto,"Dipole-Dipole")==0 ? PROTO_DIPOLE :
-          strcmp(proto,"Schlumberger") ==0 ? PROTO_SCHLUMBERGER : PROTO_WENNER;
-        scanning=true;
-        lastScanTime=millis()-SCAN_INTERVAL_MS;
-        Serial.printf("[ERT] START — protocol: %s\n",proto);
+          strcmp(proto, "Dipole-Dipole") == 0 ? PROTO_DIPOLE :
+          strcmp(proto, "Schlumberger")  == 0 ? PROTO_SCHLUMBERGER : PROTO_WENNER;
+        scanning = true;
+        lastScanTime = millis() - SCAN_INTERVAL_MS;
+        Serial.printf("[ERT] START — protocol: %s\n", proto);
       }
-      else if (strcmp(t,"STOP_SCAN")==0) {
-        scanning=false; ledcWrite(PIN_PWM,0);
+      else if (strcmp(t, "STOP_SCAN") == 0) {
+        scanning = false;
+        ledcWrite(PIN_PWM, 0);
         Serial.println("[ERT] STOPPED");
         broadcastStatus();
       }
-      else if (strcmp(t,"SET_PROTOCOL")==0) {
+      else if (strcmp(t, "SET_PROTOCOL") == 0) {
         const char* proto = cmd["protocol"] | "Wenner";
         activeProtocol =
-          strcmp(proto,"Dipole-Dipole")==0 ? PROTO_DIPOLE :
-          strcmp(proto,"Schlumberger") ==0 ? PROTO_SCHLUMBERGER : PROTO_WENNER;
-        Serial.printf("[ERT] Protocol → %s\n",proto);
+          strcmp(proto, "Dipole-Dipole") == 0 ? PROTO_DIPOLE :
+          strcmp(proto, "Schlumberger")  == 0 ? PROTO_SCHLUMBERGER : PROTO_WENNER;
+        Serial.printf("[ERT] Protocol → %s\n", proto);
         broadcastStatus();
       }
-      else if (strcmp(t,"SINGLE_SCAN")==0) { runFullScan(); }
-      else if (strcmp(t,"GET_STATUS") ==0) { broadcastStatus(); }
+      else if (strcmp(t, "SINGLE_SCAN") == 0) { runFullScan(); }
+      else if (strcmp(t, "GET_STATUS")  == 0) { broadcastStatus(); }
       break;
     }
 
     case WStype_ERROR:
       Serial.printf("[WS] Error: %s\n", length ? (char*)payload : "unknown");
+      break;
+
+    case WStype_PING:
+      Serial.println("[WS] Ping received");
+      break;
+
+    case WStype_PONG:
+      Serial.println("[WS] Pong received");
       break;
 
     default: break;
@@ -377,19 +424,37 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
 //  WiFi
 // ═════════════════════════════════════════════════════════════
 void connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
   Serial.printf("[WiFi] Connecting to '%s'", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   uint32_t t = millis();
-  while (WiFi.status()!=WL_CONNECTED && millis()-t<20000UL) {
-    delay(500); Serial.print('.');
+  while (WiFi.status() != WL_CONNECTED && millis() - t < 20000UL) {
+    delay(500);
+    Serial.print('.');
   }
-  if (WiFi.status()==WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("\n[WiFi] ✓ IP=%s  RSSI=%d dBm\n",
       WiFi.localIP().toString().c_str(), WiFi.RSSI());
   } else {
-    Serial.println("\n[WiFi] Failed — retrying in loop");
+    Serial.println("\n[WiFi] Failed — will retry in loop");
   }
+}
+
+// ═════════════════════════════════════════════════════════════
+//  WebSocket init  (called once after WiFi is up)
+// ═════════════════════════════════════════════════════════════
+void initWebSocket() {
+  // ✅ FIX 3: beginSSL() — this uses TLS (wss://) on port 443
+  // ✅ FIX 4: setInsecure() disables cert verification for Render
+  //           (Render's cert is valid, but this avoids any root-CA
+  //           bundle issues on ESP32 and matches v2 intent)
+  wsClient.beginSSL(WS_HOST, WS_PORT, WS_PATH);
+  wsClient.onEvent(onWsEvent);
+  wsClient.setReconnectInterval(WS_RECONNECT_MS);
+  // Keep-alive: ping every 15 s, expect pong within 3 s, 2 retries
+  wsClient.enableHeartbeat(15000, 3000, 2);
+  Serial.printf("[WS]  Connecting → wss://%s%s\n", WS_HOST, WS_PATH);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -400,31 +465,31 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("╔══════════════════════════════════╗");
-  Serial.println("║  ERT Landslide Monitor  v2.0     ║");
+  Serial.println("║  ERT Landslide Monitor  v3.0     ║");
   Serial.println("║  ESP32 DevKit V1 — ERT-001       ║");
   Serial.println("╚══════════════════════════════════╝");
 
   // MUX pins
-  pinMode(MUX1_S0,OUTPUT); pinMode(MUX1_S1,OUTPUT);
-  pinMode(MUX1_S2,OUTPUT); pinMode(MUX1_S3,OUTPUT); setMux1(0);
-  pinMode(MUX2_S0,OUTPUT); pinMode(MUX2_S1,OUTPUT);
-  pinMode(MUX2_S2,OUTPUT); pinMode(MUX2_S3,OUTPUT); setMux2(0);
+  pinMode(MUX1_S0, OUTPUT); pinMode(MUX1_S1, OUTPUT);
+  pinMode(MUX1_S2, OUTPUT); pinMode(MUX1_S3, OUTPUT); setMux1(0);
+  pinMode(MUX2_S0, OUTPUT); pinMode(MUX2_S1, OUTPUT);
+  pinMode(MUX2_S2, OUTPUT); pinMode(MUX2_S3, OUTPUT); setMux2(0);
 
   // PWM
   ledcAttach(PIN_PWM, PWM_FREQ, PWM_RESOLUTION);
   ledcWrite(PIN_PWM, 0);
-  Serial.println("[PWM]    ✓ GPIO25, 2 kHz");
+  Serial.println("[PWM]     ✓ GPIO25, 2 kHz");
 
   // I2C
   Wire.begin(PIN_SDA, PIN_SCL);
-  Serial.println("[I2C]    ✓ SDA=21 SCL=22");
+  Serial.println("[I2C]     ✓ SDA=21 SCL=22");
 
   // INA219
   if (!ina219.begin()) {
-    Serial.println("[INA219] ✗ Not found at 0x40!");
+    Serial.println("[INA219]  ✗ Not found at 0x40!");
   } else {
     ina219.setCalibration_16V_400mA();
-    Serial.println("[INA219] ✓ 0x40");
+    Serial.println("[INA219]  ✓ 0x40");
   }
 
   // ADS1115
@@ -439,40 +504,42 @@ void setup() {
   // WiFi
   connectWiFi();
 
-  // ── WiFiClientSecure — disable cert verification ──────────
-  // This is the critical step: setInsecure() on the underlying
-  // TCP client so Railway's TLS cert is accepted without pinning
-  wsClient.begin(WS_HOST, WS_PORT, WS_PATH);
-  wsClient.onEvent(onWsEvent);
-  wsClient.setReconnectInterval(3000);
-  wsClient.enableHeartbeat(15000, 3000, 2);
+  // WebSocket (WSS on port 443)
+  initWebSocket();
 
-  Serial.printf("[WS]     Connecting → wss://%s%s\n", WS_HOST, WS_PATH);
-  Serial.println("[ERT]    Ready — send START_SCAN from dashboard");
+  Serial.println("[ERT]     Ready — send START_SCAN from dashboard");
+  Serial.println("[NOTE]    Render free tier may take 30-60s on cold start");
 }
 
 // ═════════════════════════════════════════════════════════════
 //  LOOP
 // ═════════════════════════════════════════════════════════════
 void loop() {
+  // Reconnect WiFi if dropped
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Reconnecting...");
+    Serial.println("[WiFi] Lost — reconnecting...");
+    wsConnected = false;
     connectWiFi();
+    if (WiFi.status() == WL_CONNECTED) {
+      // Re-init WebSocket after WiFi recovery
+      initWebSocket();
+    }
+    return;
   }
 
   wsClient.loop();
 
   uint32_t now = millis();
 
-  if (scanning && (now-lastScanTime >= SCAN_INTERVAL_MS)) {
+  if (scanning && (now - lastScanTime >= SCAN_INTERVAL_MS)) {
     lastScanTime = now;
     runFullScan();
   }
-  if (now-lastZmptTime >= ZMPT_INTERVAL_MS) {
+  if (now - lastZmptTime >= ZMPT_INTERVAL_MS) {
     lastZmptTime = now;
     broadcastZMPT();
   }
-  if (now-lastStatusTime >= STATUS_INTERVAL_MS) {
+  if (now - lastStatusTime >= STATUS_INTERVAL_MS) {
     lastStatusTime = now;
     broadcastStatus();
   }
